@@ -1,6 +1,5 @@
-from qgis.PyQt.QtWidgets import QInputDialog, QComboBox
-from qgis.core import QgsProject, QgsVectorLayer, QgsFeature, QgsGeometry, QgsPointXY, QgsField
-from qgis.PyQt.QtCore import QVariant
+from qgis.PyQt.QtWidgets import QInputDialog, QFileDialog
+from qgis.core import QgsProject, QgsVectorLayer, QgsFeature, QgsGeometry, QgsPointXY, QgsWkbTypes
 import numpy as np
 
 def calculate_angle(p0, p1, p2):
@@ -14,21 +13,38 @@ def calculate_angle(p0, p1, p2):
     cosine_angle = np.clip(dot_product / (norm_v1 * norm_v2), -1.0, 1.0)
     return np.degrees(np.arccos(cosine_angle))
 
-def remove_spikes(geometry, angle_threshold):
-    new_points = []
-    points = geometry.asPolygon()[0]
-    n = len(points)
-    for i in range(n):
-        p0 = points[i - 1]
-        p1 = points[i]
-        p2 = points[(i + 1) % n]
-        angle = calculate_angle(p0, p1, p2)
-        if angle >= angle_threshold:
-            new_points.append(QgsPointXY(p1))
-    return QgsGeometry.fromPolygonXY([new_points])
+def filter_polygon(geometry, min_angle):
+    coords = geometry.asPolygon()[0]
+    new_coords = []
+    spikes_removed = 0
+
+    def check_angle(prev, curr, next):
+        angle = calculate_angle(prev, curr, next)
+        if angle >= min_angle:
+            return curr, 0
+        return None, 1
+
+    for i in range(len(coords) - 1):
+        prev, curr, next = coords[i - 1], coords[i], coords[(i + 1) % (len(coords) - 1)]
+        point, spike_removed = check_angle(prev, curr, next)
+        if point is not None:
+            new_coords.append(point)
+        spikes_removed += spike_removed
+
+    if len(new_coords) >= 3:
+        start_end_point, spike_removed = check_angle(new_coords[-1], new_coords[0], new_coords[1])
+        if start_end_point is None:
+            midpoint = tuple((np.array(new_coords[-1]) + np.array(new_coords[1])) / 2)
+            new_coords[0] = midpoint
+            spikes_removed += spike_removed
+    else:
+        return QgsGeometry.fromPolygonXY([[]]), spikes_removed
+
+    new_coords.append(new_coords[0])
+    filtered_geometry = QgsGeometry.fromPolygonXY([new_coords])
+    return filtered_geometry, spikes_removed
 
 def main():
-    # Step 1: Get the layer from the user
     layers = [layer for layer in QgsProject.instance().mapLayers().values() if isinstance(layer, QgsVectorLayer)]
     if not layers:
         print("No vector layers found in the project.")
@@ -41,11 +57,10 @@ def main():
 
     selected_layer = layers[items.index(item)]
     
-    if selected_layer.geometryType() != QgsWkbTypes.PolygonGeometry:
-        print("Selected layer is not a polygon layer.")
+    if selected_layer.geometryType() != QgsWkbTypes.PolygonGeometry and selected_layer.geometryType() != QgsWkbTypes.MultiPolygonGeometry:
+        print("Selected layer is not a polygon or multipolygon layer.")
         return
 
-    # Step 2: Process the features
     angle_threshold, ok = QInputDialog.getDouble(None, "Angle Threshold", "Enter the angle threshold:", 10, 0, 180, 1)
     if not ok:
         return
@@ -53,23 +68,23 @@ def main():
     new_features = []
     for feature in selected_layer.getFeatures():
         geometry = feature.geometry()
-        new_geometry = remove_spikes(geometry, angle_threshold)
+        new_geometry, _ = filter_polygon(geometry, angle_threshold)
         new_feature = QgsFeature(feature)
         new_feature.setGeometry(new_geometry)
         new_features.append(new_feature)
 
-    # Step 3: Create a new layer and add the processed features
-    new_layer = QgsVectorLayer("Polygon?crs={}".format(selected_layer.crs().authid()), 
-                               "{}_unspiked".format(selected_layer.name()), "memory")
+    new_layer = QgsVectorLayer(f"Polygon?crs={selected_layer.crs().authid()}", f"{selected_layer.name()}_unspiked", "memory")
     new_layer_data_provider = new_layer.dataProvider()
     new_layer_data_provider.addAttributes(selected_layer.fields())
     new_layer.updateFields()
-    
     new_layer_data_provider.addFeatures(new_features)
 
-    # Step 4: Save the new layer as a GeoPackage
-    QgsVectorFileWriter.writeAsVectorFormat(new_layer, "/path/to/save/unspiked_layer.gpkg", 
-                                            "UTF-8", selected_layer.crs(), "GPKG")
     QgsProject.instance().addMapLayer(new_layer)
+
+    export, ok = QInputDialog.getItem(None, "Export to file", "Do you want to export the result to a file?", ["Yes", "No"], 0, False)
+    if ok and export == "Yes":
+        file_path, _ = QFileDialog.getSaveFileName(None, "Save Layer", "", "GeoPackage (*.gpkg)")
+        if file_path:
+            QgsVectorFileWriter.writeAsVectorFormat(new_layer, file_path, "UTF-8", selected_layer.crs(), "GPKG")
 
 main()
