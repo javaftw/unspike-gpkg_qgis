@@ -32,3 +32,21 @@ The script performs the following steps:
 3. **Spike Detection and Removal**: Processes each polygon to remove vertices forming sharp angles below the specified threshold.
 4. **Output Options**: Asks the user if they want to save the modified layer to a file. If yes, a file dialog is displayed to specify the save location.
 
+## Flow Diagram
+
+```mermaid
+graph TD
+    A[Start] --> B[Load QGIS and the Script]
+    B --> C[Select Polygon Layer]
+    C --> D{Is Layer Valid?}
+    D -- No --> E[Show Error: Not a Polygon Layer]
+    D -- Yes --> F[Enter Angle Threshold]
+    F --> G[Process Features for Spikes]
+    G --> H[Create New Layer with Spike-Free Geometry]
+    H --> I{Export to File?}
+    I -- Yes --> J[Specify File Path and Save]
+    I -- No --> K[Add Layer to QGIS Project]
+    J --> L[End]
+    K --> L[End]
+    E --> L[End]
+```
